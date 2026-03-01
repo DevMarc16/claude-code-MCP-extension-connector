@@ -1,0 +1,12 @@
+{
+  "name": "claude-browser-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "build:shared": "npm run build -w packages/shared",
+    "build:server": "npm run build -w packages/mcp-server",
+    "build:ext": "npm run build -w packages/extension"
+  }
+}
