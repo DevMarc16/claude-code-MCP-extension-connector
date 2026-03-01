@@ -1,5 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { BridgeWebSocket } from './websocket.js';
+import { registerNavigationTools } from './tools/navigation.js';
+import { registerVisualTools } from './tools/visual.js';
+import { registerDomTools } from './tools/dom.js';
+import { registerConsoleNetworkTools } from './tools/console-network.js';
+import { registerStateTools } from './tools/state.js';
+import { registerDevTools } from './tools/devtools.js';
 
 export function createServer(bridge: BridgeWebSocket): McpServer {
   const server = new McpServer({
@@ -23,6 +29,13 @@ export function createServer(bridge: BridgeWebSocket): McpServer {
       };
     }
   );
+
+  registerNavigationTools(server, bridge);
+  registerVisualTools(server, bridge);
+  registerDomTools(server, bridge);
+  registerConsoleNetworkTools(server, bridge);
+  registerStateTools(server, bridge);
+  registerDevTools(server, bridge);
 
   return server;
 }
