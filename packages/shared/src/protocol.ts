@@ -9,7 +9,8 @@ export type CommandType =
   | 'get_accessibility_report' | 'get_performance_metrics' | 'emulate_device'
   | 'toggle_dark_mode' | 'disable_cache' | 'block_urls' | 'inject_css'
   | 'get_meta_tags' | 'pdf_page' | 'get_responsive_screenshots'
-  | 'simulate_slow_network' | 'monitor_console' | 'monitor_network';
+  | 'simulate_slow_network' | 'monitor_console' | 'monitor_network'
+  | 'dev_health' | 'dev_errors' | 'dev_watch' | 'get_framework_status';
 
 export interface BridgeRequest {
   id: string;
