@@ -1,6 +1,10 @@
+import { classifyHmrLog, startFrameworkDetection, getFrameworkStatus } from './framework-detector.js';
+
 // Always relay console messages from main world (console-hooks.ts) to background
 window.addEventListener('message', (event) => {
   if (event.source !== window || event.data?.type !== '__bridge_console__') return;
+  // Feed HMR classifier
+  classifyHmrLog(event.data.message);
   try {
     chrome.runtime.sendMessage({
       type: 'console_log',
@@ -228,6 +232,12 @@ function handleSyncCommand(command: string, params: any): any {
       document.documentElement.style.colorScheme = params.mode as string;
       return true;
     }
+    case 'get_framework_status': {
+      return getFrameworkStatus();
+    }
     default: return { error: `Unknown: ${command}` };
   }
 }
+
+// Auto-start framework detection
+startFrameworkDetection();
