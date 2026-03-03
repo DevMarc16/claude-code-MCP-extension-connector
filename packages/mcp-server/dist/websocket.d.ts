@@ -6,7 +6,13 @@ export declare class BridgeWebSocket {
     private pendingRequests;
     private eventHandlers;
     private requestCounter;
+    private stopping;
     start(): Promise<void>;
+    private writePidFile;
+    removePidFile(): void;
+    private killOrphan;
+    private tryBind;
+    private setupConnectionHandler;
     get isConnected(): boolean;
     send(command: BridgeRequest['command'], params?: Record<string, unknown>, timeoutMs?: number): Promise<BridgeResponse>;
     onEvent(handler: EventHandler): void;

@@ -1,42 +1,24 @@
-let consoleCapturing = false;
-const originalConsole = {
-  log: console.log.bind(console),
-  warn: console.warn.bind(console),
-  error: console.error.bind(console),
-  info: console.info.bind(console),
-  debug: console.debug.bind(console),
-};
+// Always relay console messages from main world (console-hooks.ts) to background
+window.addEventListener('message', (event) => {
+  if (event.source !== window || event.data?.type !== '__bridge_console__') return;
+  try {
+    chrome.runtime.sendMessage({
+      type: 'console_log',
+      level: event.data.level,
+      message: event.data.message,
+      timestamp: event.data.timestamp,
+      source: event.data.source
+    });
+  } catch {}
+});
 
-function startConsoleCapture() {
-  if (consoleCapturing) return;
-  consoleCapturing = true;
-  for (const level of ['log', 'warn', 'error', 'info', 'debug'] as const) {
-    console[level] = (...args: any[]) => {
-      originalConsole[level](...args);
-      try {
-        chrome.runtime.sendMessage({
-          type: 'console_log', level,
-          message: args.map(a => { try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch { return String(a); } }).join(' '),
-          timestamp: Date.now(), source: window.location.href
-        });
-      } catch {}
-    };
-  }
-  window.addEventListener('error', (e) => {
-    try { chrome.runtime.sendMessage({ type: 'console_log', level: 'error', message: `${e.message} at ${e.filename}:${e.lineno}:${e.colno}`, timestamp: Date.now(), source: e.filename }); } catch {}
-  });
-  window.addEventListener('unhandledrejection', (e) => {
-    try { chrome.runtime.sendMessage({ type: 'console_log', level: 'error', message: `Unhandled Promise Rejection: ${e.reason}`, timestamp: Date.now(), source: window.location.href }); } catch {}
-  });
-}
-
-function stopConsoleCapture() {
-  if (!consoleCapturing) return;
-  consoleCapturing = false;
-  for (const level of ['log', 'warn', 'error', 'info', 'debug'] as const) {
-    console[level] = originalConsole[level];
-  }
-}
+// Always capture uncaught errors and unhandled rejections
+window.addEventListener('error', (e) => {
+  try { chrome.runtime.sendMessage({ type: 'console_log', level: 'error', message: `${e.message} at ${e.filename}:${e.lineno}:${e.colno}`, timestamp: Date.now(), source: e.filename }); } catch {}
+});
+window.addEventListener('unhandledrejection', (e) => {
+  try { chrome.runtime.sendMessage({ type: 'console_log', level: 'error', message: `Unhandled Promise Rejection: ${e.reason}`, timestamp: Date.now(), source: window.location.href }); } catch {}
+});
 
 function serializeDOM(el: Element, depth: number, maxDepth: number): any {
   if (depth > maxDepth) return { tag: el.tagName.toLowerCase(), truncated: true };
@@ -47,7 +29,7 @@ function serializeDOM(el: Element, depth: number, maxDepth: number): any {
     if (classes.length) node.classes = classes;
   }
   const attrs: Record<string, string> = {};
-  for (const attr of el.attributes) { if (attr.name !== 'id' && attr.name !== 'class') attrs[attr.name] = attr.value; }
+  for (const attr of Array.from(el.attributes)) { if (attr.name !== 'id' && attr.name !== 'class') attrs[attr.name] = attr.value; }
   if (Object.keys(attrs).length) node.attributes = attrs;
   const directText = Array.from(el.childNodes).filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent?.trim()).filter(Boolean).join(' ');
   if (directText) node.textContent = directText.slice(0, 200);
@@ -90,8 +72,8 @@ function handleAsyncCommand(command: string, params: any, sendResponse: (r: any)
 
 function handleSyncCommand(command: string, params: any): any {
   switch (command) {
-    case 'start_console_capture': startConsoleCapture(); return true;
-    case 'stop_console_capture': stopConsoleCapture(); return true;
+    case 'start_console_capture': return true; // Auto-captured via console-hooks.ts
+    case 'stop_console_capture': return true;
     case 'get_dom': {
       const root = params?.selector ? document.querySelector(params.selector) : document.body;
       if (!root) return { error: `Not found: ${params?.selector}` };
@@ -105,7 +87,7 @@ function handleSyncCommand(command: string, params: any): any {
           tag: el.tagName.toLowerCase(), id: el.id || undefined,
           classes: el.className && typeof el.className === 'string' ? el.className.split(/\s+/).filter(Boolean) : undefined,
           textContent: el.textContent?.trim().slice(0, 200),
-          attributes: Object.fromEntries(Array.from(el.attributes).map(a => [a.name, a.value])),
+          attributes: Object.fromEntries(Array.from(el.attributes as unknown as Attr[]).map(a => [a.name, a.value])),
           boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
         };
       });
@@ -193,7 +175,7 @@ function handleSyncCommand(command: string, params: any): any {
       const tags: Array<Record<string, string>> = [];
       document.querySelectorAll('meta').forEach(m => {
         const e: Record<string, string> = {};
-        for (const a of m.attributes) e[a.name] = a.value;
+        for (const a of Array.from(m.attributes)) e[a.name] = a.value;
         tags.push(e);
       });
       return { title: document.title, meta: tags, canonical: document.querySelector('link[rel="canonical"]')?.getAttribute('href'), language: document.documentElement.lang };

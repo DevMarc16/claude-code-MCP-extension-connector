@@ -3,10 +3,13 @@
   "name": "Claude Browser Bridge",
   "version": "1.0.0",
   "description": "Connects your browser to Claude Code via MCP for full browser access.",
-  "permissions": ["tabs", "activeTab", "scripting", "debugger", "webRequest", "storage", "cookies"],
+  "permissions": ["tabs", "activeTab", "scripting", "debugger", "webRequest", "storage", "cookies", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "dist/background.js", "type": "module" },
-  "content_scripts": [{ "matches": ["<all_urls>"], "js": ["dist/content.js"], "run_at": "document_start" }],
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["dist/console-hooks.js"], "run_at": "document_start", "world": "MAIN" },
+    { "matches": ["<all_urls>"], "js": ["dist/content.js"], "run_at": "document_start" }
+  ],
   "icons": { "16": "icons/icon16.svg", "48": "icons/icon48.svg", "128": "icons/icon128.svg" },
   "action": { "default_title": "Claude Browser Bridge", "default_icon": { "16": "icons/icon16.svg", "48": "icons/icon48.svg" } },
   "side_panel": { "default_path": "sidepanel.html" }

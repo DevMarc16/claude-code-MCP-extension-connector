@@ -1,5 +1,5 @@
 export const WS_PORT = 9876;
-export const WS_URL = `ws://localhost:${WS_PORT}`;
+export const WS_URL = `ws://127.0.0.1:${WS_PORT}`;
 export const RECONNECT_INTERVAL_MS = 3000;
 
 export interface BridgeRequest {

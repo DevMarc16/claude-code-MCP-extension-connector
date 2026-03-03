@@ -1,7 +1,15 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import { execFileSync } from 'child_process';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { WS_PORT, type BridgeRequest, type BridgeResponse, type BridgeEvent, isResponse, isEvent } from '@claude-browser-bridge/shared';
 
 type EventHandler = (event: BridgeEvent) => void;
+
+const MAX_RETRIES = 10;
+const BASE_DELAY_MS = 1000;
+const PID_FILE = join(tmpdir(), 'claude-browser-bridge.pid');
 
 export class BridgeWebSocket {
   private wss: WebSocketServer | null = null;
@@ -13,52 +21,120 @@ export class BridgeWebSocket {
   }>();
   private eventHandlers: EventHandler[] = [];
   private requestCounter = 0;
+  private stopping = false;
 
   async start(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.wss = new WebSocketServer({ port: WS_PORT, host: 'localhost' });
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      if (this.stopping) return;
+      try {
+        await this.tryBind();
+        this.writePidFile();
+        return;
+      } catch (err: any) {
+        if (err.code === 'EADDRINUSE') {
+          console.error(`[Bridge] Port ${WS_PORT} in use (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          this.killOrphan();
+          const delay = Math.min(BASE_DELAY_MS * Math.pow(1.5, attempt), 10000);
+          await new Promise(r => setTimeout(r, delay));
+        } else {
+          throw err;
+        }
+      }
+    }
+    throw new Error(`[Bridge] Failed to bind port ${WS_PORT} after ${MAX_RETRIES} attempts`);
+  }
 
-      this.wss.on('listening', () => {
-        console.error(`[Bridge] WebSocket server listening on ws://localhost:${WS_PORT}`);
+  private writePidFile(): void {
+    try {
+      writeFileSync(PID_FILE, String(process.pid));
+    } catch {}
+  }
+
+  removePidFile(): void {
+    try {
+      if (existsSync(PID_FILE)) unlinkSync(PID_FILE);
+    } catch {}
+  }
+
+  private killOrphan(): void {
+    // First try the PID file (fast path)
+    try {
+      if (existsSync(PID_FILE)) {
+        const pid = Number(readFileSync(PID_FILE, 'utf8').trim());
+        if (pid && pid !== process.pid) {
+          console.error(`[Bridge] Killing orphan PID ${pid} from pid file`);
+          execFileSync('taskkill', ['/F', '/PID', String(pid)], { timeout: 5000 });
+          this.removePidFile();
+          return;
+        }
+      }
+    } catch {}
+
+    // Fallback: find the process holding the port
+    try {
+      const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8', timeout: 5000 });
+      const line = out.split('\n').find(l => l.includes(`127.0.0.1:${WS_PORT}`) && l.includes('LISTENING'));
+      if (!line) return;
+      const match = line.match(/LISTENING\s+(\d+)/);
+      if (match) {
+        const pid = Number(match[1]);
+        if (pid !== process.pid) {
+          console.error(`[Bridge] Killing orphan PID ${pid} from netstat`);
+          execFileSync('taskkill', ['/F', '/PID', String(pid)], { timeout: 5000 });
+        }
+      }
+    } catch {}
+  }
+
+  private tryBind(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const wss = new WebSocketServer({ port: WS_PORT, host: '127.0.0.1' });
+
+      wss.on('listening', () => {
+        console.error(`[Bridge] WebSocket server listening on ws://127.0.0.1:${WS_PORT}`);
+        this.wss = wss;
+        this.setupConnectionHandler(wss);
         resolve();
       });
 
-      this.wss.on('error', (err) => {
-        console.error('[Bridge] WebSocket server error:', err.message);
+      wss.on('error', (err) => {
+        wss.close();
         reject(err);
       });
+    });
+  }
 
-      this.wss.on('connection', (ws) => {
-        console.error('[Bridge] Extension connected');
-        this.client = ws;
+  private setupConnectionHandler(wss: WebSocketServer): void {
+    wss.on('connection', (ws) => {
+      console.error('[Bridge] Extension connected');
+      this.client = ws;
 
-        ws.on('message', (raw) => {
-          try {
-            const msg = JSON.parse(raw.toString());
-            if (isResponse(msg)) {
-              const pending = this.pendingRequests.get(msg.id);
-              if (pending) {
-                clearTimeout(pending.timer);
-                this.pendingRequests.delete(msg.id);
-                pending.resolve(msg);
-              }
-            } else if (isEvent(msg)) {
-              this.eventHandlers.forEach(h => h(msg));
+      ws.on('message', (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString());
+          if (isResponse(msg)) {
+            const pending = this.pendingRequests.get(msg.id);
+            if (pending) {
+              clearTimeout(pending.timer);
+              this.pendingRequests.delete(msg.id);
+              pending.resolve(msg);
             }
-          } catch (e) {
-            console.error('[Bridge] Failed to parse message:', e);
+          } else if (isEvent(msg)) {
+            this.eventHandlers.forEach(h => h(msg));
           }
-        });
+        } catch (e) {
+          console.error('[Bridge] Failed to parse message:', e);
+        }
+      });
 
-        ws.on('close', () => {
-          console.error('[Bridge] Extension disconnected');
-          this.client = null;
-          for (const [id, pending] of this.pendingRequests) {
-            clearTimeout(pending.timer);
-            pending.reject(new Error('Extension disconnected'));
-            this.pendingRequests.delete(id);
-          }
-        });
+      ws.on('close', () => {
+        console.error('[Bridge] Extension disconnected');
+        this.client = null;
+        for (const [id, pending] of this.pendingRequests) {
+          clearTimeout(pending.timer);
+          pending.reject(new Error('Extension disconnected'));
+          this.pendingRequests.delete(id);
+        }
       });
     });
   }
@@ -91,6 +167,7 @@ export class BridgeWebSocket {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     for (const [id, pending] of this.pendingRequests) {
       clearTimeout(pending.timer);
       pending.reject(new Error('Server shutting down'));
@@ -98,5 +175,6 @@ export class BridgeWebSocket {
     this.pendingRequests.clear();
     if (this.client) { this.client.close(); this.client = null; }
     if (this.wss) { this.wss.close(); this.wss = null; }
+    this.removePidFile();
   }
 }

@@ -13,6 +13,7 @@ const sharedConfig = {
 const configs = [
   { ...sharedConfig, entryPoints: ['src/background.ts'], outfile: 'dist/background.js' },
   { ...sharedConfig, entryPoints: ['src/content.ts'], outfile: 'dist/content.js', format: 'iife' },
+  { ...sharedConfig, entryPoints: ['src/console-hooks.ts'], outfile: 'dist/console-hooks.js', format: 'iife' },
   { ...sharedConfig, entryPoints: ['src/sidepanel.ts'], outfile: 'dist/sidepanel.js', format: 'iife' },
 ];
 

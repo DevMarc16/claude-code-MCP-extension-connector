@@ -145,9 +145,28 @@ async function handleCommand(req: BridgeRequest): Promise<BridgeResponse> {
           return respondError(req.id, `Responsive screenshot failed: ${e.message}`);
         }
       }
+      // Execute script in page main world via chrome.scripting API (bypasses CSP)
+      // Intentional: equivalent to browser DevTools console — only accessible via
+      // localhost WebSocket from an authenticated Claude Code session.
+      case 'execute_script': {
+        const tabId = await getTabId(req.params);
+        const code = req.params.code as string;
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId },
+            world: 'MAIN',
+            // eslint-disable-next-line no-eval -- DevTools-equivalent eval, auth-gated
+            func: (c: string) => { try { return (0, globalThis.eval)(c); } catch (e: any) { return { error: e.message }; } },
+            args: [code]
+          });
+          return respond(req.id, results[0]?.result);
+        } catch (e: any) {
+          return respondError(req.id, e.message);
+        }
+      }
       // Content script commands
       case 'get_dom': case 'query_selector': case 'click': case 'type_text': case 'fill_form':
-      case 'execute_script': case 'get_computed_styles': case 'highlight_element':
+      case 'get_computed_styles': case 'highlight_element':
       case 'get_event_listeners': case 'wait_for_element': case 'wait_for_navigation':
       case 'get_local_storage': case 'get_session_storage': case 'get_meta_tags':
       case 'get_performance_metrics': case 'get_accessibility_report':
@@ -156,17 +175,10 @@ async function handleCommand(req: BridgeRequest): Promise<BridgeResponse> {
         const results = await chrome.tabs.sendMessage(tabId, { command: req.command, params: req.params });
         return respond(req.id, results);
       }
-      // Console monitoring
+      // Console monitoring — always active, this just acknowledges the command
       case 'monitor_console': {
         const tabId = await getTabId(req.params);
-        if (req.params.enable) {
-          monitoringConsole.add(tabId);
-          if (!consoleLogs.has(tabId)) consoleLogs.set(tabId, []);
-          await chrome.tabs.sendMessage(tabId, { command: 'start_console_capture' });
-        } else {
-          monitoringConsole.delete(tabId);
-          await chrome.tabs.sendMessage(tabId, { command: 'stop_console_capture' });
-        }
+        if (!consoleLogs.has(tabId)) consoleLogs.set(tabId, []);
         return respond(req.id, null);
       }
       case 'get_console_logs': {
@@ -304,15 +316,15 @@ chrome.debugger.onEvent.addListener((source, method, params: any) => {
   }
 });
 
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Always capture console logs from all tabs
   if (message.type === 'console_log' && sender.tab?.id) {
     const tabId = sender.tab.id;
-    if (monitoringConsole.has(tabId)) {
-      const logs = consoleLogs.get(tabId) || [];
-      logs.push({ level: message.level, message: message.message, timestamp: message.timestamp, source: message.source });
-      if (logs.length > 1000) logs.splice(0, logs.length - 1000);
-      consoleLogs.set(tabId, logs);
-    }
+    const logs = consoleLogs.get(tabId) || [];
+    logs.push({ level: message.level, message: message.message, timestamp: message.timestamp, source: message.source });
+    if (logs.length > 1000) logs.splice(0, logs.length - 1000);
+    consoleLogs.set(tabId, logs);
   }
   if (message.command === 'get_bridge_status') { sendResponse({ connected: isConnected }); return true; }
   if (message.command === 'reconnect') { connect(); sendResponse({ ok: true }); return true; }
@@ -323,5 +335,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   monitoringConsole.delete(tabId); monitoringNetwork.delete(tabId);
 });
 
+// Use chrome.alarms instead of setInterval — survives service worker suspension
+chrome.alarms.create('bridge-reconnect', { periodInMinutes: 0.05 }); // ~3 seconds
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'bridge-reconnect' && !isConnected) connect();
+});
 connect();
-setInterval(() => { if (!isConnected) connect(); }, RECONNECT_INTERVAL_MS);
