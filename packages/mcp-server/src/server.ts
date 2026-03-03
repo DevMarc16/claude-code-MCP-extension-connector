@@ -6,6 +6,7 @@ import { registerDomTools } from './tools/dom.js';
 import { registerConsoleNetworkTools } from './tools/console-network.js';
 import { registerStateTools } from './tools/state.js';
 import { registerDevTools } from './tools/devtools.js';
+import { registerDevCopilotTools } from './tools/dev-tools.js';
 
 export function createServer(bridge: BridgeWebSocket): McpServer {
   const server = new McpServer({
@@ -36,6 +37,7 @@ export function createServer(bridge: BridgeWebSocket): McpServer {
   registerConsoleNetworkTools(server, bridge);
   registerStateTools(server, bridge);
   registerDevTools(server, bridge);
+  registerDevCopilotTools(server, bridge);
 
   return server;
 }
