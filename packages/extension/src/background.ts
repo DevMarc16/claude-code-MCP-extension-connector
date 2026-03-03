@@ -304,15 +304,46 @@ async function handleCommand(req: BridgeRequest): Promise<BridgeResponse> {
 
 chrome.debugger.onEvent.addListener((source, method, params: any) => {
   if (!source.tabId) return;
-  if (method === 'Network.requestWillBeSent' && monitoringNetwork.has(source.tabId)) {
-    const reqs = networkRequests.get(source.tabId) || [];
-    reqs.push({ requestId: params.requestId, url: params.request.url, method: params.request.method, type: params.type, startTime: params.timestamp, requestHeaders: params.request.headers });
-    networkRequests.set(source.tabId, reqs);
+  const tabId = source.tabId;
+
+  if (method === 'Network.requestWillBeSent' && monitoringNetwork.has(tabId)) {
+    const reqs = networkRequests.get(tabId) || [];
+    reqs.push({
+      requestId: params.requestId,
+      url: params.request.url,
+      method: params.request.method,
+      type: params.type,
+      startTime: params.timestamp,
+      requestHeaders: params.request.headers,
+      _wallTime: Date.now()
+    });
+    if (reqs.length > 500) reqs.splice(0, reqs.length - 500);
+    networkRequests.set(tabId, reqs);
   }
-  if (method === 'Network.responseReceived' && monitoringNetwork.has(source.tabId)) {
-    const reqs = networkRequests.get(source.tabId) || [];
-    const entry = reqs.find((r: any) => r.requestId === params.requestId);
-    if (entry) { (entry as any).status = params.response.status; (entry as any).statusText = params.response.statusText; (entry as any).responseHeaders = params.response.headers; (entry as any).size = params.response.encodedDataLength; }
+
+  if (method === 'Network.responseReceived' && monitoringNetwork.has(tabId)) {
+    const reqs = networkRequests.get(tabId) || [];
+    const entry: any = reqs.find((r: any) => r.requestId === params.requestId);
+    if (entry) {
+      entry.status = params.response.status;
+      entry.statusText = params.response.statusText;
+      entry.responseHeaders = params.response.headers;
+      entry.size = params.response.encodedDataLength;
+      entry.duration = Date.now() - (entry._wallTime || Date.now());
+      entry.failed = params.response.status >= 400;
+      entry.slow = entry.duration > 2000;
+    }
+  }
+
+  if (method === 'Network.loadingFailed' && monitoringNetwork.has(tabId)) {
+    const reqs = networkRequests.get(tabId) || [];
+    const entry: any = reqs.find((r: any) => r.requestId === params.requestId);
+    if (entry) {
+      entry.failed = true;
+      entry.errorText = params.errorText;
+      entry.canceled = params.canceled;
+      entry.blockedReason = params.blockedReason;
+    }
   }
 });
 
@@ -328,6 +359,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.command === 'get_bridge_status') { sendResponse({ connected: isConnected }); return true; }
   if (message.command === 'reconnect') { connect(); sendResponse({ ok: true }); return true; }
+});
+
+// Auto-start network monitoring on localhost tabs
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url) {
+    const isLocalhost = tab.url.startsWith('http://localhost') || tab.url.startsWith('http://127.0.0.1');
+    if (isLocalhost && !monitoringNetwork.has(tabId)) {
+      monitoringNetwork.add(tabId);
+      if (!networkRequests.has(tabId)) networkRequests.set(tabId, []);
+      chrome.debugger.attach({ tabId }, '1.3')
+        .then(() => chrome.debugger.sendCommand({ tabId }, 'Network.enable'))
+        .catch(() => {}); // Silently fail if debugger can't attach
+    }
+  }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
