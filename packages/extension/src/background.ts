@@ -4,7 +4,7 @@ let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let isConnected = false;
 
-const consoleLogs = new Map<number, Array<{ level: string; message: string; timestamp: number; source?: string }>>();
+const consoleLogs = new Map<number, Array<{ level: string; message: string; timestamp: number; source?: string; stack?: string }>>();
 const networkRequests = new Map<number, Array<Record<string, unknown>>>();
 const monitoringConsole = new Set<number>();
 const monitoringNetwork = new Set<number>();
@@ -322,8 +322,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'console_log' && sender.tab?.id) {
     const tabId = sender.tab.id;
     const logs = consoleLogs.get(tabId) || [];
-    logs.push({ level: message.level, message: message.message, timestamp: message.timestamp, source: message.source });
-    if (logs.length > 1000) logs.splice(0, logs.length - 1000);
+    logs.push({ level: message.level, message: message.message, timestamp: message.timestamp, source: message.source, stack: message.stack });
+    if (logs.length > 2000) logs.splice(0, logs.length - 2000);
     consoleLogs.set(tabId, logs);
   }
   if (message.command === 'get_bridge_status') { sendResponse({ connected: isConnected }); return true; }

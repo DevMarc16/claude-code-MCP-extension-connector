@@ -7,7 +7,8 @@ window.addEventListener('message', (event) => {
       level: event.data.level,
       message: event.data.message,
       timestamp: event.data.timestamp,
-      source: event.data.source
+      source: event.data.source,
+      stack: event.data.stack
     });
   } catch {}
 });
