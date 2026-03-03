@@ -1,4 +1,5 @@
 import { WS_URL, RECONNECT_INTERVAL_MS, type BridgeRequest, type BridgeResponse } from './types.js';
+import { classifyLog, groupErrors } from './error-classifier.js';
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -293,6 +294,108 @@ async function handleCommand(req: BridgeRequest): Promise<BridgeResponse> {
           await chrome.debugger.detach({ tabId });
           return respond(req.id, result.data);
         } catch (e: any) { try { await chrome.debugger.detach({ tabId }); } catch {} return respondError(req.id, e.message); }
+      }
+      // Dev Copilot composite commands
+      case 'dev_health': {
+        const tabId = await getTabId(req.params);
+        const tab = await chrome.tabs.get(tabId);
+
+        // Console errors/warnings
+        const allLogs = consoleLogs.get(tabId) || [];
+        const classified = allLogs.map(l => classifyLog(l));
+        const errors = classified.filter(l => l.severity <= 2);
+        const warnings = classified.filter(l => l.severity === 3);
+
+        // Failed/slow network requests
+        const reqs = networkRequests.get(tabId) || [];
+        const failedReqs = reqs.filter((r: any) => r.failed);
+        const slowReqs = reqs.filter((r: any) => r.slow);
+
+        // Framework status via content script
+        let frameworkStatus = null;
+        try {
+          frameworkStatus = await chrome.tabs.sendMessage(tabId, { command: 'get_framework_status', params: {} });
+        } catch {}
+
+        // Performance metrics via content script
+        let perfMetrics = null;
+        try {
+          perfMetrics = await chrome.tabs.sendMessage(tabId, { command: 'get_performance_metrics', params: {} });
+        } catch {}
+
+        // Screenshot
+        let screenshot = null;
+        try {
+          const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+          screenshot = dataUrl.replace(/^data:image\/png;base64,/, '');
+        } catch {}
+
+        return respond(req.id, {
+          url: tab.url,
+          title: tab.title,
+          errors: groupErrors(errors).slice(0, 10),
+          warnings: groupErrors(warnings).slice(0, 5),
+          errorCount: errors.length,
+          warningCount: warnings.length,
+          failedRequests: failedReqs.slice(-10).map((r: any) => ({
+            url: r.url, method: r.method, status: r.status,
+            statusText: r.statusText, errorText: r.errorText, duration: r.duration
+          })),
+          slowRequests: slowReqs.slice(-5).map((r: any) => ({
+            url: r.url, method: r.method, status: r.status, duration: r.duration
+          })),
+          failedRequestCount: failedReqs.length,
+          slowRequestCount: slowReqs.length,
+          framework: frameworkStatus,
+          performance: perfMetrics,
+          screenshot
+        });
+      }
+      case 'dev_errors': {
+        const tabId = await getTabId(req.params);
+        const allLogs = consoleLogs.get(tabId) || [];
+        const classified = allLogs.map(l => classifyLog(l));
+        const errorsAndWarnings = classified.filter(l => l.severity <= 3);
+        const grouped = groupErrors(errorsAndWarnings);
+
+        // Also include failed network requests as errors
+        const reqs = networkRequests.get(tabId) || [];
+        const failedReqs = reqs.filter((r: any) => r.failed).map((r: any) => ({
+          level: 'error',
+          message: `${r.method} ${r.url} → ${r.status || 'FAILED'} ${r.statusText || r.errorText || ''}`.trim(),
+          timestamp: r._wallTime || 0,
+          source: r.url,
+          category: 'network-error' as const,
+          severity: 2,
+          dedupKey: `NET:${r.url?.replace(/\?.*/, '')}`,
+          count: 1
+        }));
+
+        return respond(req.id, {
+          errors: [...grouped, ...failedReqs].sort((a, b) => a.severity - b.severity || b.timestamp - a.timestamp),
+          totalCount: errorsAndWarnings.length + failedReqs.length
+        });
+      }
+      case 'dev_watch': {
+        const tabId = await getTabId(req.params);
+
+        // Auto-start network monitoring if not already active
+        if (!monitoringNetwork.has(tabId)) {
+          monitoringNetwork.add(tabId);
+          if (!networkRequests.has(tabId)) networkRequests.set(tabId, []);
+          try {
+            await chrome.debugger.attach({ tabId }, '1.3');
+            await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
+          } catch {}
+        }
+
+        return respond(req.id, {
+          tabId,
+          consoleCapture: true,   // always on
+          networkMonitoring: monitoringNetwork.has(tabId),
+          logCount: (consoleLogs.get(tabId) || []).length,
+          networkRequestCount: (networkRequests.get(tabId) || []).length
+        });
       }
       default:
         return respondError(req.id, `Unknown command: ${req.command}`);
