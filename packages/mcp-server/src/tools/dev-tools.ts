@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BridgeWebSocket } from '../websocket.js';
+import { saveScreenshot } from './visual.js';
 
 export function registerDevCopilotTools(server: McpServer, bridge: BridgeWebSocket) {
 
@@ -71,6 +72,8 @@ export function registerDevCopilotTools(server: McpServer, bridge: BridgeWebSock
 
       if (data.screenshot) {
         content.push({ type: 'image', data: data.screenshot, mimeType: 'image/png' });
+        const filepath = saveScreenshot(data.screenshot, 'dev-health');
+        content.push({ type: 'text', text: `Screenshot saved to ${filepath}` });
       }
 
       return { content: content as any };

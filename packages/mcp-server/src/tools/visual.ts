@@ -3,8 +3,20 @@ import { z } from 'zod';
 import { BridgeWebSocket } from '../websocket.js';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
+import { mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
 
 const screenshotCache = new Map<string, string>();
+
+export function saveScreenshot(base64: string, name?: string): string {
+  const dir = join(process.cwd(), 'screenshots');
+  mkdirSync(dir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const filename = name ? `${name}-${timestamp}.png` : `screenshot-${timestamp}.png`;
+  const filepath = join(dir, filename);
+  writeFileSync(filepath, Buffer.from(base64, 'base64'));
+  return filepath;
+}
 
 export function registerVisualTools(server: McpServer, bridge: BridgeWebSocket) {
   server.tool(
@@ -13,14 +25,21 @@ export function registerVisualTools(server: McpServer, bridge: BridgeWebSocket) 
     {
       tabId: z.number().optional().describe('Tab ID. If omitted, uses active tab.'),
       fullPage: z.boolean().optional().describe('Capture full scrollable page'),
-      label: z.string().optional().describe('Label for visual_diff comparisons')
+      label: z.string().optional().describe('Label for visual_diff comparisons'),
+      save: z.boolean().optional().describe('Save screenshot to screenshots/ folder in working directory'),
+      saveName: z.string().optional().describe('Custom name prefix for saved file')
     },
-    async ({ tabId, fullPage, label }) => {
+    async ({ tabId, fullPage, label, save, saveName }) => {
       const res = await bridge.send('screenshot', { tabId, fullPage }, 60000);
       if (!res.success) return { content: [{ type: 'text', text: `Error: ${res.error}` }] };
       const base64 = res.data as string;
       if (label) screenshotCache.set(label, base64);
-      return { content: [{ type: 'image', data: base64, mimeType: 'image/png' }] };
+      const content: any[] = [{ type: 'image', data: base64, mimeType: 'image/png' }];
+      if (save) {
+        const filepath = saveScreenshot(base64, saveName);
+        content.push({ type: 'text', text: `Saved to ${filepath}` });
+      }
+      return { content };
     }
   );
 
